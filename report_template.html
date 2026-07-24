@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KPI 4 &mdash; Membership Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream: #F5F1E8;
+    --ink: #1B1B18;
+    --gray: #7A7466;
+    --orange: #C44819;
+    --light-gray: #E8E3D8;
+    --rule: 1px solid #1B1B18;
+    --rule-thick: 2px solid #1B1B18;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--cream); color: var(--ink); font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5; }
+  .page { max-width: 1100px; margin: 0 auto; padding: 40px 32px 80px; }
+  .masthead { border-top: var(--rule-thick); border-bottom: var(--rule); padding: 12px 0 10px; margin-bottom: 6px; }
+  .masthead-top { display: flex; justify-content: space-between; align-items: baseline; }
+  .masthead-title { font-family: 'Fraunces', serif; font-size: 34px; font-weight: 700; letter-spacing: -0.5px; }
+  .masthead-date { font-family: 'Inter', sans-serif; font-size: 12px; color: var(--gray); text-transform: uppercase; letter-spacing: 0.08em; }
+  .masthead-deck { font-family: 'Fraunces', serif; font-style: italic; font-size: 14px; color: var(--gray); margin-top: 4px; }
+  .double-rule { border-top: var(--rule-thick); margin-top: 8px; }
+  .method-note { border-left: 3px solid var(--orange); padding: 8px 12px; margin: 16px 0 24px; font-size: 11.5px; color: var(--gray); }
+  .method-note strong { color: var(--ink); }
+  .section-header { display: flex; align-items: center; gap: 10px; margin: 32px 0 16px; }
+  .section-badge { width: 26px; height: 26px; border: var(--rule-thick); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: 'Fraunces', serif; font-weight: 600; font-size: 13px; flex-shrink: 0; }
+  .section-title { font-family: 'Fraunces', serif; font-size: 18px; font-weight: 600; flex-shrink: 0; }
+  .section-rule { flex: 1; border-top: var(--rule); }
+  .cards { display: grid; gap: 0; border: var(--rule-thick); margin-bottom: 20px; }
+  .cards-4 { grid-template-columns: repeat(4, 1fr); }
+  .card { padding: 14px 16px 12px; border-right: var(--rule); }
+  .card:last-child { border-right: none; }
+  .card-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gray); margin-bottom: 4px; }
+  .card-number { font-family: 'Fraunces', serif; font-size: 44px; font-weight: 500; line-height: 1; color: var(--ink); }
+  .card-number.orange { color: var(--orange); }
+  .card-sub { font-size: 11px; color: var(--gray); margin-top: 3px; }
+  .chart-block { border: var(--rule-thick); padding: 18px 20px 20px; margin-bottom: 20px; }
+  .chart-title { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+  .chart-note { font-size: 11px; color: var(--gray); margin-bottom: 14px; }
+  svg text { font-family: 'Inter', sans-serif; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 14px; font-size: 11px; color: var(--ink); }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 12px; height: 12px; display: inline-block; border: 1px solid var(--ink); }
+  .footer { border-top: var(--rule); padding-top: 14px; margin-top: 48px; font-size: 11px; color: var(--gray); display: flex; justify-content: space-between; }
+  .diff-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  .diff-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--gray); padding: 6px 10px; border-bottom: var(--rule); }
+  .diff-table td { padding: 8px 10px; border-bottom: 1px solid var(--light-gray); }
+  .diff-table tr:last-child td { border-bottom: none; }
+  .diff-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0; border: var(--rule-thick); margin-bottom: 16px; }
+  .diff-cards .card { border-right: var(--rule); }
+  .diff-cards .card:last-child { border-right: none; }
+  .diff-list-title { font-family: 'Fraunces', serif; font-size: 13px; font-weight: 600; margin: 18px 0 4px; }
+  .badge-lost { color: var(--orange); font-weight: 600; }
+  .badge-new { color: #3A7D3A; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="masthead">
+    <div class="masthead-top">
+      <div class="masthead-title">KPI 4 &mdash; Membership Report</div>
+      <div class="masthead-date">__PRETTY_DATE__</div>
+    </div>
+    <div class="masthead-deck">Active service-agreement memberships, weekly signups and year-to-date cumulative growth</div>
+    <div class="double-rule"></div>
+  </div>
+
+  <div class="method-note">
+    <strong>Source:</strong> __SOURCE_FILE__ (__TOTAL_RECORDS__ records). <strong>Filter:</strong> only rows with Status = Active count toward signups and the cumulative growth chart. <strong>Excluded plans:</strong> __EXCLUDED_PLANS__. <strong>Buckets:</strong> weeks start Friday and end the following Thursday. Current week is partial.
+  </div>
+
+  <div class="section-header">
+    <div class="section-badge">A</div>
+    <div class="section-title">Headline metrics</div>
+    <div class="section-rule"></div>
+  </div>
+
+  <div class="cards cards-4">
+    <div class="card">
+      <div class="card-label">Active members</div>
+      <div class="card-number">__TOTAL_ACTIVE__</div>
+      <div class="card-sub">Status = Active</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last __N_WEEKS__ weeks</div>
+      <div class="card-number">__LAST_SIGNUPS_TOTAL__</div>
+      <div class="card-sub">Signups in window</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Plan types</div>
+      <div class="card-number">__PLAN_COUNT__</div>
+      <div class="card-sub">Distinct active plans</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Avg signups / week</div>
+      <div class="card-number orange">__AVG_PER_WEEK__</div>
+      <div class="card-sub">Last __N_WEEKS__-week average</div>
+    </div>
+  </div>
+
+  <div class="section-header">
+    <div class="section-badge">B</div>
+    <div class="section-title">Weekly signups vs. cancellations</div>
+    <div class="section-rule"></div>
+  </div>
+  <div class="chart-block">
+    <div class="chart-title">Last __N_WEEKS__ weeks &middot; signups up, cancellations down</div>
+    <div class="chart-note">Signups (ink, positive axis) are from the current CSV. Cancellations (orange, negative axis) come from the Combined File's Name Tracking tab, bucketed by End Date into the same Friday &rarr; Thursday weeks. Current week (__CURRENT_WEEK__) is partial.</div>
+    __WEEKLY_SVG__
+  </div>
+
+  <div class="section-header">
+    <div class="section-badge">C</div>
+    <div class="section-title">Weekly net gain / loss</div>
+    <div class="section-rule"></div>
+  </div>
+  <div class="chart-block">
+    <div class="chart-title">Signups minus cancellations, per week</div>
+    <div class="chart-note">Positive bars (ink) mean the week added members; negative bars (orange) mean net loss. Sums directly from chart B.</div>
+    __NET_SVG__
+  </div>
+
+  <div class="section-header">
+    <div class="section-badge">D</div>
+    <div class="section-title">Overall membership growth</div>
+    <div class="section-rule"></div>
+  </div>
+  <div class="chart-block">
+    <div class="chart-title">Cumulative actives &middot; last __N_WEEKS__ weeks</div>
+    <div class="chart-note">Each bar is the running total of all active members through that week's end, stacked by plan.</div>
+    __YTD_SVG__
+    __LEGEND__
+  </div>
+
+  <div class="section-header">
+    <div class="section-badge">E</div>
+    <div class="section-title">Active members by plan</div>
+    <div class="section-rule"></div>
+  </div>
+  <div class="chart-block">
+    <div class="chart-title">Today's plan mix</div>
+    <div class="chart-note">Count and share of total active members.</div>
+    __PLAN_SVG__
+  </div>
+
+  __CANCELLATIONS_SECTION__
+
+  <div class="footer">
+    <div>KPI 4 &middot; Bedrock Plumbing &amp; Drain Cleaning</div>
+    <div>Generated __REPORT_GENERATED__</div>
+  </div>
+</div>
+</body>
+</html>
