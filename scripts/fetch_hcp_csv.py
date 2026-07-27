@@ -1,30 +1,15 @@
 #!/usr/bin/env python3
 """
-GitHub Action worker.
+GitHub Action worker for the Bedrock KPI 4 pipeline.
 
 Logs into HouseCall Pro with Playwright, opens the Customer Plans / Service
-Agreements summary, triggers the "download" flow (which emails the CSV to the
-account), then falls back to scraping the visible table into a CSV so we don't
-have to wait for the email.
-
-The scraped CSV is uploaded to the Drive folder given by DRIVE_CSV_FOLDER_ID,
-where the Render cron job (run_kpi4.py) picks it up two hours later.
-
-Env vars required:
-  HCP_EMAIL              HouseCall Pro login email
-  HCP_PASSWORD           HouseCall Pro password
-  GOOGLE_SERVICE_ACCOUNT JSON service-account key
-  DRIVE_CSV_FOLDER_ID    Target Drive folder ID
-
-Selectors are intentionally coarse (looking for text labels rather than opaque
-class names) so this survives most HCP UI tweaks. If HCP restructures the page
-we'll see it in the Actions logs as a timeout waiting for a specific label.
+Agreements summary, and scrapes the visible table into a CSV that gets
+uploaded to the Drive folder given by DRIVE_CSV_FOLDER_ID.
 """
 from __future__ import annotations
 
 import csv
 import datetime
-import io
 import os
 import re
 import sys
@@ -50,7 +35,7 @@ CSV_HEADERS = [
 ]
 
 
-def require_env(name: str) -> str:
+def require_env(name):
     v = os.environ.get(name)
     if not v:
         raise SystemExit("Missing required env var: %s" % name)
@@ -58,7 +43,6 @@ def require_env(name: str) -> str:
 
 
 def _first_visible(page, selectors, timeout=10_000):
-    """Try each selector; return the first one that resolves. Raises if all fail."""
     last_err = None
     for sel in selectors:
         try:
@@ -70,14 +54,13 @@ def _first_visible(page, selectors, timeout=10_000):
     raise last_err or RuntimeError("no selector matched")
 
 
-def login(page, email: str, password: str) -> None:
+def login(page, email, password):
     print("Logging into HouseCall Pro...")
     page.goto(HCP_LOGIN_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle", timeout=15_000)
     print("Landed at URL: %s" % page.url)
     print("Page title: %s" % page.title())
 
-    # Try dismissing any cookie banner
     for label in ["Accept all", "Accept cookies", "Got it", "I agree", "OK"]:
         try:
             page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=2_000)
@@ -86,21 +69,16 @@ def login(page, email: str, password: str) -> None:
         except Exception:
             pass
 
-    # Take an early screenshot for debugging
     try:
         page.screenshot(path="login_page.png", full_page=True)
     except Exception:
         pass
 
-    # HCP uses Material-style floating labels without proper <label for> hookups.
-    # The most reliable approach: grab the two visible inputs on the page — the
-    # first is email, the second is password. Confirmed by the login page screenshot.
     inputs = page.locator("input:visible")
     inputs.first.wait_for(state="visible", timeout=15_000)
     n_inputs = inputs.count()
     print("Visible inputs on login page: %d" % n_inputs)
 
-    # Dump some diagnostic HTML about the inputs so future breakage is debuggable
     for i in range(min(n_inputs, 4)):
         try:
             attrs = inputs.nth(i).evaluate(
@@ -113,7 +91,6 @@ def login(page, email: str, password: str) -> None:
     if n_inputs < 2:
         raise SystemExit("Expected at least 2 input fields on the login page.")
 
-    # Prefer typed inputs when available; otherwise fall back to positional.
     email_field = None
     password_field = None
     typed_email = page.locator('input[type="email"]:visible')
@@ -123,14 +100,15 @@ def login(page, email: str, password: str) -> None:
     if typed_pwd.count() > 0:
         password_field = typed_pwd.first
     if email_field is None:
-        email_field = inputs.nth(0)
+        by_id = page.locator('input#email:visible')
+        email_field = by_id.first if by_id.count() > 0 else inputs.nth(0)
     if password_field is None:
-        password_field = inputs.nth(1)
+        by_id = page.locator('input#password:visible')
+        password_field = by_id.first if by_id.count() > 0 else inputs.nth(1)
 
     email_field.fill(email)
     password_field.fill(password)
 
-    # Click Sign in — try button text first, then any submit-type control.
     submit = _first_visible(page, [
         page.get_by_role("button", name=re.compile(r"^\s*(sign in|log in|continue)\s*$", re.I)),
         page.locator('button:has-text("Sign in")'),
@@ -140,30 +118,70 @@ def login(page, email: str, password: str) -> None:
     ], timeout=5_000)
     submit.click()
 
-    # Wait for URL change — HCP redirects to /app/... after login
+    # Wait for URL to leave the login/log_in interim page.
     try:
-        page.wait_for_url(re.compile(r"pro\.housecallpro\.com/app"), timeout=45_000)
+        page.wait_for_url(
+            re.compile(r"pro\.housecallpro\.com/app/(?!log_in|login|sign_in)"),
+            timeout=60_000,
+        )
     except Exception:
-        print("URL after submit: %s" % page.url)
+        print("URL still on login-adjacent page: %s" % page.url)
+        try:
+            page.screenshot(path="post_login_stuck.png", full_page=True)
+            print("Saved post_login_stuck.png for diagnosis")
+        except Exception:
+            pass
+        try:
+            body_snippet = page.locator("body").inner_text()[:2000]
+            print("Body text (first 2000 chars):\n%s" % body_snippet)
+        except Exception:
+            pass
         raise
     print("Logged in. Now at: %s" % page.url)
+    try:
+        page.wait_for_load_state("networkidle", timeout=15_000)
+    except Exception:
+        pass
+    print("Post-idle URL: %s" % page.url)
 
 
-def open_service_agreements(page) -> None:
+def open_service_agreements(page):
     print("Opening Customer Plans summary...")
     page.goto(HCP_SUMMARY_URL, wait_until="networkidle", timeout=60_000)
-    # Wait for the "N customer plans" heading to appear.
-    page.wait_for_selector("text=/\\d+\\s+customer plans/i", timeout=30_000)
+    print("Service agreements URL: %s" % page.url)
+    print("Service agreements title: %s" % page.title())
+    tried = [
+        "text=/\\d+\\s+customer plans/i",
+        "text=/customer plans/i",
+        "text=/service agreements/i",
+        "[role='row']",
+        "table",
+    ]
+    ok = False
+    for sel in tried:
+        try:
+            page.wait_for_selector(sel, timeout=10_000)
+            print("Matched selector: %s" % sel)
+            ok = True
+            break
+        except Exception:
+            continue
+    if not ok:
+        try:
+            page.screenshot(path="service_agreements_page.png", full_page=True)
+            print("Saved service_agreements_page.png for diagnosis")
+            body_snippet = page.locator("body").inner_text()[:2000]
+            print("Body text (first 2000 chars):\n%s" % body_snippet)
+        except Exception:
+            pass
+        raise RuntimeError("Could not find Customer Plans table on the page.")
 
 
-def trigger_email_export(page) -> None:
-    """Best-effort: click the download icon and confirm 'Send'. If HCP changes
-    the UI and we can't find it, we still fall through to scraping."""
+def trigger_email_export(page):
     try:
-        # The download icon has no accessible label historically; try common patterns.
         candidates = [
             page.locator("[aria-label*='download' i]"),
-            page.locator("button:has(svg)").filter(has_text=""),  # icon buttons
+            page.locator("button:has(svg)").filter(has_text=""),
             page.locator("[data-testid*='download' i]"),
         ]
         for loc in candidates:
@@ -173,21 +191,27 @@ def trigger_email_export(page) -> None:
         page.get_by_role("button", name=re.compile(r"^send$", re.I)).click(timeout=5_000)
         print("Triggered email export.")
     except PWTimeout:
-        print("Email export button not found (harmless — proceeding with scrape).")
+        print("Email export button not found (harmless).")
     except Exception as e:
         print("Email export skipped: %s" % e)
 
 
-def scrape_all_rows(page) -> list[dict]:
-    """
-    Iterate through every row on the Customer Plans page and return dicts
-    matching CSV_HEADERS as closely as we can from what's visible.
-    Only the columns actually shown on the page will be populated; the rest are blank.
-    """
+def _to_iso(s):
+    s = (s or "").strip()
+    if not s:
+        return ""
+    for fmt in ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return s
+
+
+def scrape_all_rows(page):
     print("Scraping Customer Plans table...")
-    # Scroll to the bottom to force lazy-load of remaining rows.
     prev_count = -1
-    for _ in range(40):  # cap iterations
+    for _ in range(40):
         count = page.locator("[data-row-id], tr[data-row-id], [role='row']").count()
         if count == prev_count:
             break
@@ -205,8 +229,6 @@ def scrape_all_rows(page) -> list[dict]:
         n = cells.count()
         if n < 4:
             continue
-        # Column order matches HCP's Customer Plans page:
-        # Customer | Phone | Plan | Address | Start | End | Next service | Status | Billing cycle
         try:
             display_name = cells.nth(0).inner_text().strip()
             phone = cells.nth(1).inner_text().strip()
@@ -214,7 +236,6 @@ def scrape_all_rows(page) -> list[dict]:
             address_lines = cells.nth(3).inner_text().split("\n")
             start = cells.nth(4).inner_text().strip()
             end = cells.nth(5).inner_text().strip()
-            # cells.nth(6) is Next service - not in export
             status = cells.nth(7).inner_text().strip() if n > 7 else ""
         except Exception:
             continue
@@ -243,20 +264,7 @@ def scrape_all_rows(page) -> list[dict]:
     return scraped
 
 
-def _to_iso(s: str) -> str:
-    """Convert HCP-style dates like 'Jul 18, 2026' or 'May 09, 2025' to YYYY-MM-DD."""
-    s = (s or "").strip()
-    if not s:
-        return ""
-    for fmt in ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d"):
-        try:
-            return datetime.datetime.strptime(s, fmt).date().isoformat()
-        except ValueError:
-            continue
-    return s
-
-
-def write_csv(rows: list[dict], path: str) -> None:
+def write_csv(rows, path):
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=CSV_HEADERS)
         w.writeheader()
@@ -265,7 +273,7 @@ def write_csv(rows: list[dict], path: str) -> None:
     print("Wrote %s (%d rows)" % (path, len(rows)))
 
 
-def main() -> int:
+def main():
     email = require_env("HCP_EMAIL")
     password = require_env("HCP_PASSWORD")
     folder_id = require_env("DRIVE_CSV_FOLDER_ID")
@@ -289,7 +297,7 @@ def main() -> int:
                 page.screenshot(path="failed_scrape.png", full_page=True)
                 raise SystemExit("No rows scraped. See failed_scrape.png artifact.")
             write_csv(rows, csv_path)
-        except Exception as e:
+        except Exception:
             try:
                 page.screenshot(path="failure.png", full_page=True)
                 print("Saved failure.png for debugging")
