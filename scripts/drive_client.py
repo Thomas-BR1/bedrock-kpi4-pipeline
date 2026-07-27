@@ -3,6 +3,11 @@ Thin Google Drive wrapper used by both fetch_hcp_csv.py (Actions) and run_kpi4.p
 
 Reads a service-account JSON blob from env var GOOGLE_SERVICE_ACCOUNT and returns
 a preconfigured googleapiclient service.
+
+All list/create/update calls pass supportsAllDrives=True so this works whether the
+target folder is on a personal Drive or a Shared Drive. Service accounts have no
+storage quota of their own — new-file creation only succeeds when the target
+folder lives on a Shared Drive.
 """
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ from typing import Optional
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
@@ -31,14 +36,23 @@ def get_service():
 
 
 def upload_file(service, local_path: str, folder_id: str,
-                mime_type: Optional[str] = None, name: Optional[str] = None) -> str:
-    """Upload a local file into a Drive folder. Returns the new file's ID."""
+                mime_type: Optional[str] = None, name: Optional[str] = None,
+                supports_all_drives: bool = True) -> str:
+    """Upload a local file into a Drive folder. Returns the new file's ID.
+
+    supports_all_drives defaults to True so this works with Shared Drives.
+    Service accounts have no personal quota, so the parent folder must be on
+    a Shared Drive for creation to succeed.
+    """
     body = {
         "name": name or os.path.basename(local_path),
         "parents": [folder_id],
     }
     media = MediaFileUpload(local_path, mimetype=mime_type, resumable=False)
-    resp = service.files().create(body=body, media_body=media, fields="id, name").execute()
+    resp = service.files().create(
+        body=body, media_body=media, fields="id, name",
+        supportsAllDrives=supports_all_drives,
+    ).execute()
     print("Drive: uploaded %s (%s)" % (resp["name"], resp["id"]))
     return resp["id"]
 
@@ -50,13 +64,14 @@ def latest_csv_in_folder(service, folder_id: str) -> Optional[dict]:
     resp = service.files().list(
         q=q, orderBy="modifiedTime desc", pageSize=1,
         fields="files(id, name, modifiedTime)",
+        supportsAllDrives=True, includeItemsFromAllDrives=True,
     ).execute()
     files = resp.get("files") or []
     return files[0] if files else None
 
 
 def download_file(service, file_id: str, local_path: str) -> None:
-    req = service.files().get_media(fileId=file_id)
+    req = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     with io.FileIO(local_path, "wb") as fh:
         downloader = MediaIoBaseDownload(fh, req)
         done = False
@@ -86,5 +101,7 @@ def replace_google_sheet_from_xlsx(service, file_id: str, xlsx_path: str) -> Non
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         resumable=False,
     )
-    service.files().update(fileId=file_id, media_body=media).execute()
+    service.files().update(
+        fileId=file_id, media_body=media, supportsAllDrives=True,
+    ).execute()
     print("Drive: replaced sheet %s with %s" % (file_id, xlsx_path))
