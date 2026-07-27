@@ -813,9 +813,13 @@ def main():
     weekly_cx = None
     nt_cumulative = None
     if args.combined_xlsx:
-        cancellations = read_cancellations(args.combined_xlsx, excluded_plans=excluded_plans)
+        # Read Name Tracking from the POST-update file so charts reflect this run's
+        # freshly-added/cancelled members. Fall back to the original if the update
+        # step was skipped for any reason.
+        nt_source = updated_path if diff else args.combined_xlsx
+        cancellations = read_cancellations(nt_source, excluded_plans=excluded_plans)
         weekly_cx = aggregate_weekly_cancellations(cancellations, today, args.weeks, agg["plans"])
-        nt_rows = read_all_name_tracking(args.combined_xlsx, excluded_plans=excluded_plans)
+        nt_rows = read_all_name_tracking(nt_source, excluded_plans=excluded_plans)
         nt_cumulative = aggregate_nt_cumulative(nt_rows, today, args.weeks, agg["plans"])
 
     html = render_html(agg, os.path.basename(args.csv), args.template,
@@ -832,8 +836,9 @@ def main():
         total_up = sum(w["total"] for w in agg["weekly"])
         total_dn = sum(w["total"] for w in weekly_cx)
         print("Signups=%d, Cancellations=%d, Net=%+d" % (total_up, total_dn, total_up - total_dn))
+    if nt_cumulative:
         print("NT cumulative: %d -> %d" % (nt_cumulative[0]["cum_total"], nt_cumulative[-1]["cum_total"]))
-
+    return 0
 
 
 if __name__ == "__main__":
