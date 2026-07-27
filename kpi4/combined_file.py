@@ -255,6 +255,7 @@ def update_combined_file(combined_xlsx_path, csv_rows, pull_date, output_xlsx_pa
         "new_tab_name": tab_name,
         "prior_active_count": len(nt_active_rows),
         "current_active_count": len(current_active),
+        "cancelled_this_run": cancelled_this_run,
         "new_this_run": new_this_run,
         "output_path": output_xlsx_path,
     }
