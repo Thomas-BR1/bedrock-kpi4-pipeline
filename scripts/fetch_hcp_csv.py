@@ -69,11 +69,6 @@ def login(page, email, password):
         except Exception:
             pass
 
-    try:
-        page.screenshot(path="login_page.png", full_page=True)
-    except Exception:
-        pass
-
     inputs = page.locator("input:visible")
     inputs.first.wait_for(state="visible", timeout=15_000)
     n_inputs = inputs.count()
@@ -118,7 +113,6 @@ def login(page, email, password):
     ], timeout=5_000)
     submit.click()
 
-    # Wait for URL to leave the login/log_in interim page.
     try:
         page.wait_for_url(
             re.compile(r"pro\.housecallpro\.com/app/(?!log_in|login|sign_in)"),
@@ -128,12 +122,6 @@ def login(page, email, password):
         print("URL still on login-adjacent page: %s" % page.url)
         try:
             page.screenshot(path="post_login_stuck.png", full_page=True)
-            print("Saved post_login_stuck.png for diagnosis")
-        except Exception:
-            pass
-        try:
-            body_snippet = page.locator("body").inner_text()[:2000]
-            print("Body text (first 2000 chars):\n%s" % body_snippet)
         except Exception:
             pass
         raise
@@ -157,43 +145,15 @@ def open_service_agreements(page):
         "[role='row']",
         "table",
     ]
-    ok = False
     for sel in tried:
         try:
             page.wait_for_selector(sel, timeout=10_000)
             print("Matched selector: %s" % sel)
-            ok = True
             break
         except Exception:
             continue
-    if not ok:
-        try:
-            page.screenshot(path="service_agreements_page.png", full_page=True)
-            print("Saved service_agreements_page.png for diagnosis")
-            body_snippet = page.locator("body").inner_text()[:2000]
-            print("Body text (first 2000 chars):\n%s" % body_snippet)
-        except Exception:
-            pass
-        raise RuntimeError("Could not find Customer Plans table on the page.")
-
-
-def trigger_email_export(page):
-    try:
-        candidates = [
-            page.locator("[aria-label*='download' i]"),
-            page.locator("button:has(svg)").filter(has_text=""),
-            page.locator("[data-testid*='download' i]"),
-        ]
-        for loc in candidates:
-            if loc.count() > 0:
-                loc.first.click(timeout=5_000)
-                break
-        page.get_by_role("button", name=re.compile(r"^send$", re.I)).click(timeout=5_000)
-        print("Triggered email export.")
-    except PWTimeout:
-        print("Email export button not found (harmless).")
-    except Exception as e:
-        print("Email export skipped: %s" % e)
+    # Give the table extra time to load rows even after the heading appears.
+    time.sleep(3)
 
 
 def _to_iso(s):
@@ -208,24 +168,115 @@ def _to_iso(s):
     return s
 
 
+def diagnose_table(page):
+    """Print counts for a bunch of possible row selectors so we can see which
+    one HCP is actually using."""
+    probes = [
+        "[role='row']",
+        "tr",
+        "tbody tr",
+        "[data-row-id]",
+        "[data-testid*='row' i]",
+        "[class*='row' i]",
+        "[class*='Row']",
+        ".MuiDataGrid-row",
+        ".ReactVirtualized__Table__row",
+        ".rt-tr",
+        "div[role='rowgroup'] > div",
+    ]
+    print("--- Row selector probes ---")
+    for p in probes:
+        try:
+            c = page.locator(p).count()
+            print("  %-40s -> %d" % (p, c))
+        except Exception as e:
+            print("  %-40s -> ERR %s" % (p, e))
+
+
 def scrape_all_rows(page):
     print("Scraping Customer Plans table...")
+
+    # Take a "before scrape" screenshot for debugging
+    try:
+        page.screenshot(path="before_scrape.png", full_page=True)
+        print("Saved before_scrape.png")
+    except Exception:
+        pass
+
+    diagnose_table(page)
+
+    # Try a range of row selectors; pick the one that returns the most rows.
+    row_selectors = [
+        "[role='row']",
+        "tbody tr",
+        "tr[data-row-id]",
+        "[data-row-id]",
+        ".MuiDataGrid-row",
+        "div[role='rowgroup'] > div",
+    ]
+    best_sel = None
+    best_count = 0
+    for sel in row_selectors:
+        try:
+            c = page.locator(sel).count()
+            if c > best_count:
+                best_count = c
+                best_sel = sel
+        except Exception:
+            pass
+    if not best_sel or best_count < 2:
+        # No usable row selector — dump body text and fail
+        try:
+            body = page.locator("body").inner_text()[:3000]
+            print("Body text snippet:\n%s" % body)
+        except Exception:
+            pass
+        return []
+
+    print("Using row selector: %s (found %d)" % (best_sel, best_count))
+
+    # Scroll to force lazy-load
     prev_count = -1
     for _ in range(40):
-        count = page.locator("[data-row-id], tr[data-row-id], [role='row']").count()
+        count = page.locator(best_sel).count()
         if count == prev_count:
             break
         prev_count = count
         page.mouse.wheel(0, 20_000)
         time.sleep(0.6)
-    rows_locator = page.locator("[role='row']")
+    rows_locator = page.locator(best_sel)
     total = rows_locator.count()
-    print("Found %d row elements (incl. header)." % total)
+    print("Total rows after scroll: %d" % total)
+
+    # Discover cell selector by trying a few on the first row
+    first = rows_locator.nth(0)
+    cell_selectors = ["[role='cell']", "[role='gridcell']", "td", "[data-field]"]
+    cell_sel = None
+    for cs in cell_selectors:
+        try:
+            if first.locator(cs).count() >= 4:
+                cell_sel = cs
+                break
+        except Exception:
+            pass
+    if not cell_sel:
+        # Try row 1 in case row 0 is a header without cells
+        second = rows_locator.nth(1) if total > 1 else first
+        for cs in cell_selectors:
+            try:
+                if second.locator(cs).count() >= 4:
+                    cell_sel = cs
+                    break
+            except Exception:
+                pass
+    print("Using cell selector: %s" % cell_sel)
+    if not cell_sel:
+        return []
 
     scraped = []
     for i in range(total):
         row = rows_locator.nth(i)
-        cells = row.locator("[role='cell']")
+        cells = row.locator(cell_sel)
         n = cells.count()
         if n < 4:
             continue
@@ -234,8 +285,8 @@ def scrape_all_rows(page):
             phone = cells.nth(1).inner_text().strip()
             plan = cells.nth(2).inner_text().strip()
             address_lines = cells.nth(3).inner_text().split("\n")
-            start = cells.nth(4).inner_text().strip()
-            end = cells.nth(5).inner_text().strip()
+            start = cells.nth(4).inner_text().strip() if n > 4 else ""
+            end = cells.nth(5).inner_text().strip() if n > 5 else ""
             status = cells.nth(7).inner_text().strip() if n > 7 else ""
         except Exception:
             continue
@@ -291,7 +342,7 @@ def main():
         try:
             login(page, email, password)
             open_service_agreements(page)
-            trigger_email_export(page)
+            # Skip trigger_email_export — was clicking modal buttons that hid the table.
             rows = scrape_all_rows(page)
             if not rows:
                 page.screenshot(path="failed_scrape.png", full_page=True)
