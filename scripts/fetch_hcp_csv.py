@@ -3,8 +3,8 @@
 GitHub Action worker for the Bedrock KPI 4 pipeline.
 
 Logs into HouseCall Pro with Playwright, opens the Customer Plans / Service
-Agreements summary, and scrapes the visible table into a CSV that gets
-uploaded to the Drive folder given by DRIVE_CSV_FOLDER_ID.
+Agreements summary, and scrapes ALL pages of the visible table into a CSV
+that gets uploaded to the Drive folder given by DRIVE_CSV_FOLDER_ID.
 """
 from __future__ import annotations
 
@@ -74,15 +74,6 @@ def login(page, email, password):
     n_inputs = inputs.count()
     print("Visible inputs on login page: %d" % n_inputs)
 
-    for i in range(min(n_inputs, 4)):
-        try:
-            attrs = inputs.nth(i).evaluate(
-                "el => ({type: el.type, name: el.name, id: el.id, placeholder: el.placeholder})"
-            )
-            print("  input[%d]: %s" % (i, attrs))
-        except Exception:
-            pass
-
     if n_inputs < 2:
         raise SystemExit("Expected at least 2 input fields on the login page.")
 
@@ -120,10 +111,6 @@ def login(page, email, password):
         )
     except Exception:
         print("URL still on login-adjacent page: %s" % page.url)
-        try:
-            page.screenshot(path="post_login_stuck.png", full_page=True)
-        except Exception:
-            pass
         raise
     print("Logged in. Now at: %s" % page.url)
     try:
@@ -142,7 +129,6 @@ def open_service_agreements(page):
         "text=/\\d+\\s+customer plans/i",
         "text=/customer plans/i",
         "text=/service agreements/i",
-        "[role='row']",
         "table",
     ]
     for sel in tried:
@@ -152,8 +138,85 @@ def open_service_agreements(page):
             break
         except Exception:
             continue
-    # Give the table extra time to load rows even after the heading appears.
     time.sleep(3)
+
+
+def try_set_max_page_size(page):
+    """Try to set the rows-per-page selector to its largest value (usually 100)."""
+    candidates = [
+        "select[name*='page' i]",
+        "select[aria-label*='rows per page' i]",
+        "select[aria-label*='per page' i]",
+        ".MuiTablePagination-select",
+    ]
+    for sel in candidates:
+        loc = page.locator(sel)
+        if loc.count() == 0:
+            continue
+        try:
+            options = loc.first.locator("option").all_inner_texts()
+            print("Found page-size selector %s with options: %s" % (sel, options))
+            # pick the numerically largest option
+            nums = []
+            for t in options:
+                m = re.match(r"\s*(\d+)", t)
+                if m:
+                    nums.append(int(m.group(1)))
+            if not nums:
+                continue
+            biggest = max(nums)
+            loc.first.select_option(str(biggest))
+            print("Set page size to %d" % biggest)
+            time.sleep(2)
+            return True
+        except Exception as e:
+            print("Page-size selector %s attempt failed: %s" % (sel, e))
+    # MUI sometimes uses a button-based select
+    try:
+        btn = page.locator("[aria-labelledby*='per-page' i], [aria-label*='rows per page' i]")
+        if btn.count() > 0:
+            btn.first.click(timeout=3_000)
+            time.sleep(0.5)
+            # Look for the biggest number in the popup
+            opts = page.locator("[role='option']").all_inner_texts()
+            print("Popup rows-per-page options: %s" % opts)
+            nums = [(int(re.match(r"\s*(\d+)", t).group(1)), t) for t in opts if re.match(r"\s*\d+", t)]
+            if nums:
+                biggest_text = max(nums)[1]
+                page.locator("[role='option']", has_text=biggest_text.strip()).first.click()
+                print("Selected page size option: %s" % biggest_text)
+                time.sleep(2)
+                return True
+    except Exception as e:
+        print("Button-select page-size attempt failed: %s" % e)
+    return False
+
+
+def find_row_selector(page):
+    for sel in [
+        "tbody tr",
+        "[role='row']",
+        "tr[data-row-id]",
+        "[data-row-id]",
+        ".MuiDataGrid-row",
+    ]:
+        try:
+            c = page.locator(sel).count()
+            if c >= 2:
+                return sel, c
+        except Exception:
+            pass
+    return None, 0
+
+
+def find_cell_selector(row):
+    for cs in ["td", "[role='cell']", "[role='gridcell']", "[data-field]"]:
+        try:
+            if row.locator(cs).count() >= 4:
+                return cs
+        except Exception:
+            pass
+    return None
 
 
 def _to_iso(s):
@@ -168,151 +231,125 @@ def _to_iso(s):
     return s
 
 
-def diagnose_table(page):
-    """Print counts for a bunch of possible row selectors so we can see which
-    one HCP is actually using."""
-    probes = [
-        "[role='row']",
-        "tr",
-        "tbody tr",
-        "[data-row-id]",
-        "[data-testid*='row' i]",
-        "[class*='row' i]",
-        "[class*='Row']",
-        ".MuiDataGrid-row",
-        ".ReactVirtualized__Table__row",
-        ".rt-tr",
-        "div[role='rowgroup'] > div",
+def parse_row(cells):
+    n = cells.count()
+    if n < 4:
+        return None
+    try:
+        display_name = cells.nth(0).inner_text().strip()
+        phone = cells.nth(1).inner_text().strip()
+        plan = cells.nth(2).inner_text().strip()
+        address_lines = cells.nth(3).inner_text().split("\n")
+        start = cells.nth(4).inner_text().strip() if n > 4 else ""
+        end = cells.nth(5).inner_text().strip() if n > 5 else ""
+        status = cells.nth(7).inner_text().strip() if n > 7 else ""
+    except Exception:
+        return None
+    if not display_name or display_name.lower().startswith("customer"):
+        return None
+    street = address_lines[0].strip() if address_lines else ""
+    city_state_zip = address_lines[1].strip() if len(address_lines) > 1 else ""
+    m = re.match(r"(.+?),\s*([A-Z]{2})\s*(\d{5})?", city_state_zip)
+    city, state, zipc = ("", "", "")
+    if m:
+        city, state, zipc = m.group(1), m.group(2), (m.group(3) or "")
+    return {
+        "Plan": plan,
+        "Start Date": _to_iso(start),
+        "End Date": _to_iso(end),
+        "Status": status,
+        "First Name": "", "Last Name": "",
+        "Display Name": display_name,
+        "Mobile Number": phone, "Home Number": "",
+        "Email": "", "Company": "", "ID": "",
+        "Address Street Line 1": street, "Address Street Line 2": "",
+        "Address City": city, "Address State": state, "Address Postal Code": zipc,
+        "Address Billing?": "", "Address Notes": "",
+    }
+
+
+def scrape_current_page(page, row_sel, cell_sel):
+    rows_loc = page.locator(row_sel)
+    total = rows_loc.count()
+    scraped = []
+    for i in range(total):
+        r = parse_row(rows_loc.nth(i).locator(cell_sel))
+        if r:
+            scraped.append(r)
+    return scraped
+
+
+def click_next_page(page):
+    """Click a 'Next page' button. Returns True on success."""
+    candidates = [
+        page.get_by_role("button", name=re.compile(r"^\s*next\s*(page)?\s*$", re.I)),
+        page.locator("button[aria-label*='next page' i]"),
+        page.locator("[aria-label*='Go to next page' i]"),
+        page.locator("button:has-text('Next')"),
     ]
-    print("--- Row selector probes ---")
-    for p in probes:
+    for c in candidates:
         try:
-            c = page.locator(p).count()
-            print("  %-40s -> %d" % (p, c))
-        except Exception as e:
-            print("  %-40s -> ERR %s" % (p, e))
+            if c.count() == 0:
+                continue
+            btn = c.first
+            if not btn.is_enabled():
+                return False
+            btn.click(timeout=3_000)
+            time.sleep(2)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def scrape_all_rows(page):
-    print("Scraping Customer Plans table...")
-
-    # Take a "before scrape" screenshot for debugging
+    print("Scraping Customer Plans table (all pages)...")
     try:
         page.screenshot(path="before_scrape.png", full_page=True)
-        print("Saved before_scrape.png")
     except Exception:
         pass
 
-    diagnose_table(page)
+    try_set_max_page_size(page)
 
-    # Try a range of row selectors; pick the one that returns the most rows.
-    row_selectors = [
-        "[role='row']",
-        "tbody tr",
-        "tr[data-row-id]",
-        "[data-row-id]",
-        ".MuiDataGrid-row",
-        "div[role='rowgroup'] > div",
-    ]
-    best_sel = None
-    best_count = 0
-    for sel in row_selectors:
-        try:
-            c = page.locator(sel).count()
-            if c > best_count:
-                best_count = c
-                best_sel = sel
-        except Exception:
-            pass
-    if not best_sel or best_count < 2:
-        # No usable row selector — dump body text and fail
-        try:
-            body = page.locator("body").inner_text()[:3000]
-            print("Body text snippet:\n%s" % body)
-        except Exception:
-            pass
+    row_sel, count = find_row_selector(page)
+    if not row_sel:
+        print("No row selector matched")
+        return []
+    print("Row selector: %s (initial %d)" % (row_sel, count))
+
+    first_row = page.locator(row_sel).nth(0)
+    cell_sel = find_cell_selector(first_row)
+    if not cell_sel:
+        # try row 1 in case row 0 is a header
+        cell_sel = find_cell_selector(page.locator(row_sel).nth(1))
+    print("Cell selector: %s" % cell_sel)
+    if not cell_sel:
         return []
 
-    print("Using row selector: %s (found %d)" % (best_sel, best_count))
-
-    # Scroll to force lazy-load
-    prev_count = -1
-    for _ in range(40):
-        count = page.locator(best_sel).count()
-        if count == prev_count:
+    all_rows = []
+    seen_keys = set()
+    max_pages = 60  # 60 * 100 = 6000, plenty of headroom
+    for page_num in range(max_pages):
+        page_rows = scrape_current_page(page, row_sel, cell_sel)
+        # dedupe defensively — some UIs re-render current page after page-size change
+        new_this_page = 0
+        for r in page_rows:
+            key = (r["Display Name"], r["Plan"], r["Start Date"])
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            all_rows.append(r)
+            new_this_page += 1
+        print("Page %d: %d rows (%d new). Total so far: %d"
+              % (page_num + 1, len(page_rows), new_this_page, len(all_rows)))
+        if new_this_page == 0:
+            # No new rows — pagination didn't advance
             break
-        prev_count = count
-        page.mouse.wheel(0, 20_000)
-        time.sleep(0.6)
-    rows_locator = page.locator(best_sel)
-    total = rows_locator.count()
-    print("Total rows after scroll: %d" % total)
-
-    # Discover cell selector by trying a few on the first row
-    first = rows_locator.nth(0)
-    cell_selectors = ["[role='cell']", "[role='gridcell']", "td", "[data-field]"]
-    cell_sel = None
-    for cs in cell_selectors:
-        try:
-            if first.locator(cs).count() >= 4:
-                cell_sel = cs
-                break
-        except Exception:
-            pass
-    if not cell_sel:
-        # Try row 1 in case row 0 is a header without cells
-        second = rows_locator.nth(1) if total > 1 else first
-        for cs in cell_selectors:
-            try:
-                if second.locator(cs).count() >= 4:
-                    cell_sel = cs
-                    break
-            except Exception:
-                pass
-    print("Using cell selector: %s" % cell_sel)
-    if not cell_sel:
-        return []
-
-    scraped = []
-    for i in range(total):
-        row = rows_locator.nth(i)
-        cells = row.locator(cell_sel)
-        n = cells.count()
-        if n < 4:
-            continue
-        try:
-            display_name = cells.nth(0).inner_text().strip()
-            phone = cells.nth(1).inner_text().strip()
-            plan = cells.nth(2).inner_text().strip()
-            address_lines = cells.nth(3).inner_text().split("\n")
-            start = cells.nth(4).inner_text().strip() if n > 4 else ""
-            end = cells.nth(5).inner_text().strip() if n > 5 else ""
-            status = cells.nth(7).inner_text().strip() if n > 7 else ""
-        except Exception:
-            continue
-        if not display_name or display_name.lower().startswith("customer"):
-            continue
-        street = address_lines[0].strip() if address_lines else ""
-        city_state_zip = address_lines[1].strip() if len(address_lines) > 1 else ""
-        m = re.match(r"(.+?),\s*([A-Z]{2})\s*(\d{5})?", city_state_zip)
-        city, state, zipc = ("", "", "")
-        if m:
-            city, state, zipc = m.group(1), m.group(2), (m.group(3) or "")
-        scraped.append({
-            "Plan": plan,
-            "Start Date": _to_iso(start),
-            "End Date": _to_iso(end),
-            "Status": status,
-            "First Name": "", "Last Name": "",
-            "Display Name": display_name,
-            "Mobile Number": phone, "Home Number": "",
-            "Email": "", "Company": "", "ID": "",
-            "Address Street Line 1": street, "Address Street Line 2": "",
-            "Address City": city, "Address State": state, "Address Postal Code": zipc,
-            "Address Billing?": "", "Address Notes": "",
-        })
-    print("Scraped %d rows." % len(scraped))
-    return scraped
+        if not click_next_page(page):
+            print("No more pages.")
+            break
+    print("Scraped %d total rows across all pages." % len(all_rows))
+    return all_rows
 
 
 def write_csv(rows, path):
@@ -342,16 +379,14 @@ def main():
         try:
             login(page, email, password)
             open_service_agreements(page)
-            # Skip trigger_email_export — was clicking modal buttons that hid the table.
             rows = scrape_all_rows(page)
             if not rows:
                 page.screenshot(path="failed_scrape.png", full_page=True)
-                raise SystemExit("No rows scraped. See failed_scrape.png artifact.")
+                raise SystemExit("No rows scraped.")
             write_csv(rows, csv_path)
         except Exception:
             try:
                 page.screenshot(path="failure.png", full_page=True)
-                print("Saved failure.png for debugging")
             except Exception:
                 pass
             raise
@@ -360,7 +395,8 @@ def main():
             browser.close()
 
     service = get_service()
-    upload_file(service, csv_path, folder_id, mime_type="text/csv")
+    upload_file(service, csv_path, folder_id, mime_type="text/csv",
+                supports_all_drives=True)
     print("Done.")
     return 0
 
