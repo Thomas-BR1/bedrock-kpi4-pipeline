@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from drive_client import get_service, upload_file  # noqa: E402
 
 
-HCP_LOGIN_URL = "https://pro.housecallpro.com/pro/login"
+HCP_LOGIN_URL = "https://pro.housecallpro.com/app"
 HCP_SUMMARY_URL = "https://pro.housecallpro.com/app/service_agreements/summary"
 
 CSV_HEADERS = [
@@ -74,6 +74,17 @@ def login(page, email: str, password: str) -> None:
     print("Logging into HouseCall Pro...")
     page.goto(HCP_LOGIN_URL, wait_until="domcontentloaded")
     page.wait_for_load_state("networkidle", timeout=15_000)
+    print("Landed at URL: %s" % page.url)
+    print("Page title: %s" % page.title())
+
+    # Try dismissing any cookie banner
+    for label in ["Accept all", "Accept cookies", "Got it", "I agree", "OK"]:
+        try:
+            page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=2_000)
+            print("Dismissed banner: %s" % label)
+            break
+        except Exception:
+            pass
 
     # Take an early screenshot for debugging
     try:
@@ -275,4 +286,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+        sys.exit(main())
