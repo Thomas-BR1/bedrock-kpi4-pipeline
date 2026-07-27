@@ -1,0 +1,38 @@
+name: fetch-hcp-csv
+
+# Weekly: Thursdays at 10:00 UTC (5 AM Central Daylight Time).
+on:
+  schedule:
+    - cron: "0 10 * * 4"
+  workflow_dispatch: {}
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HCP_EMAIL: ${{ secrets.HCP_EMAIL }}
+      HCP_PASSWORD: ${{ secrets.HCP_PASSWORD }}
+      GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+      DRIVE_CSV_FOLDER_ID: ${{ secrets.DRIVE_CSV_FOLDER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+      - name: Run HouseCall Pro CSV fetcher
+        run: python scripts/fetch_hcp_csv.py
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-debug
+          path: |
+            *.png
+            trace.zip
+          if-no-files-found: ignore
