@@ -264,9 +264,9 @@ def aggregate_nt_cumulative(nt_rows, today, weeks, plans):
 
 
 def render_nt_cumulative_section(nt_cum, plans, has_data):
-    """Section F — cumulative actives sourced from Name Tracking."""
+    """Section D — cumulative actives sourced from Name Tracking (Section D since old growth chart was removed)."""
     if not has_data:
-        return ('<div class="section-header"><div class="section-badge">F</div>'
+        return ('<div class="section-header"><div class="section-badge">D</div>'
                 '<div class="section-title">Cumulative actives (Name Tracking)</div>'
                 '<div class="section-rule"></div></div>'
                 '<div class="chart-block"><div class="chart-note">'
@@ -277,7 +277,7 @@ def render_nt_cumulative_section(nt_cum, plans, has_data):
     total = nt_cum[-1]["cum_total"] if nt_cum else 0
     first = nt_cum[0]["cum_total"] if nt_cum else 0
     return (
-        '<div class="section-header"><div class="section-badge">F</div>'
+        '<div class="section-header"><div class="section-badge">D</div>'
         '<div class="section-title">Cumulative actives (Name Tracking)</div>'
         '<div class="section-rule"></div></div>'
         '<div class="chart-block">'
@@ -833,6 +833,7 @@ def main():
         total_dn = sum(w["total"] for w in weekly_cx)
         print("Signups=%d, Cancellations=%d, Net=%+d" % (total_up, total_dn, total_up - total_dn))
         print("NT cumulative: %d -> %d" % (nt_cumulative[0]["cum_total"], nt_cumulative[-1]["cum_total"]))
+
 
 
 if __name__ == "__main__":
