@@ -110,8 +110,17 @@ def main() -> int:
     print("Replacing Combined File in Drive (preserves ID / URL)...")
     replace_google_sheet_from_xlsx(service, combined_id, updated_combined)
 
-    print("Uploading HTML report to Drive folder...")
-    upload_file(service, report_local, csv_folder_id, mime_type="text/html")
+    # Uploading the HTML report as a NEW Drive file requires storage quota, which
+    # service accounts don't have unless the target folder lives on a Shared Drive.
+    # Try it, but don't fail the whole run if it errors — the sheet update above is
+    # the important side effect.
+    try:
+        print("Uploading HTML report to Drive folder...")
+        upload_file(service, report_local, csv_folder_id, mime_type="text/html")
+    except Exception as e:
+        print("Report upload skipped (service account lacks storage quota): %s" % e)
+        print("The Combined File in Drive is still updated. Generate the HTML report")
+        print("on demand via the Cowork skill, or move the folder to a Shared Drive.")
 
     print("Done. Total active: %d" % agg["summary"]["total_active"])
     return 0
