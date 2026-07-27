@@ -57,14 +57,62 @@ def require_env(name: str) -> str:
     return v
 
 
+def _first_visible(page, selectors, timeout=10_000):
+    """Try each selector; return the first one that resolves. Raises if all fail."""
+    last_err = None
+    for sel in selectors:
+        try:
+            loc = sel if hasattr(sel, "fill") else page.locator(sel)
+            loc.first.wait_for(state="visible", timeout=timeout)
+            return loc.first
+        except Exception as e:
+            last_err = e
+    raise last_err or RuntimeError("no selector matched")
+
+
 def login(page, email: str, password: str) -> None:
     print("Logging into HouseCall Pro...")
     page.goto(HCP_LOGIN_URL, wait_until="domcontentloaded")
-    page.get_by_label(re.compile(r"email", re.I)).fill(email)
-    page.get_by_label(re.compile(r"password", re.I)).fill(password)
-    page.get_by_role("button", name=re.compile(r"^(log in|sign in)", re.I)).click()
-    # Wait for a signed-in signal - the main nav "Home" link.
-    page.wait_for_selector("text=Home", timeout=30_000)
+    page.wait_for_load_state("networkidle", timeout=15_000)
+
+    # Take an early screenshot for debugging
+    try:
+        page.screenshot(path="login_page.png", full_page=True)
+    except Exception:
+        pass
+
+    # Try multiple ways to find the email input
+    email_field = _first_visible(page, [
+        'input[type="email"]',
+        'input[name="email"]',
+        'input[name="user[email]"]',
+        'input[id*="email" i]',
+        'input[placeholder*="email" i]',
+        page.get_by_label(re.compile(r"email", re.I)),
+        page.get_by_placeholder(re.compile(r"email", re.I)),
+        page.get_by_role("textbox", name=re.compile(r"email", re.I)),
+    ])
+    email_field.fill(email)
+
+    password_field = _first_visible(page, [
+        'input[type="password"]',
+        'input[name="password"]',
+        'input[name="user[password]"]',
+        'input[id*="password" i]',
+        page.get_by_label(re.compile(r"password", re.I)),
+        page.get_by_placeholder(re.compile(r"password", re.I)),
+    ])
+    password_field.fill(password)
+
+    submit = _first_visible(page, [
+        page.get_by_role("button", name=re.compile(r"^(log in|sign in|continue)", re.I)),
+        'button[type="submit"]',
+        'input[type="submit"]',
+    ], timeout=5_000)
+    submit.click()
+
+    # Wait for a signed-in signal — anything indicating we made it past the login
+    page.wait_for_url(re.compile(r"pro\.housecallpro\.com/app|dashboard|home"), timeout=45_000)
     print("Logged in.")
 
 
@@ -202,18 +250,24 @@ def main() -> int:
         try:
             login(page, email, password)
             open_service_agreements(page)
-            trigger_email_export(page)  # fire-and-forget; primary data comes from scrape
+            trigger_email_export(page)
             rows = scrape_all_rows(page)
             if not rows:
-                # Save screenshot for debugging
                 page.screenshot(path="failed_scrape.png", full_page=True)
                 raise SystemExit("No rows scraped. See failed_scrape.png artifact.")
             write_csv(rows, csv_path)
+        except Exception as e:
+            # Always leave a screenshot behind for debugging in the Actions artifact
+            try:
+                page.screenshot(path="failure.png", full_page=True)
+                print("Saved failure.png for debugging")
+            except Exception:
+                pass
+            raise
         finally:
             context.close()
             browser.close()
 
-    # Upload to Drive
     service = get_service()
     upload_file(service, csv_path, folder_id, mime_type="text/csv")
     print("Done.")
