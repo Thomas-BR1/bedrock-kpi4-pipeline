@@ -1,11 +1,12 @@
-# Render Blueprint — defines the weekly KPI 4 cron job.
+# Render Blueprint — defines the daily KPI 4 cron job.
 services:
   - type: cron
-    name: bedrock-kpi4-weekly
+    name: bedrock-kpi4-daily
     runtime: python
     plan: starter
-    # Thursdays at 12:00 UTC = 7:00 AM Central Daylight Time.
-    schedule: "0 12 * * 4"
+    # Daily at 01:30 UTC = 8:30 PM Central Daylight Time / 7:30 PM Central Standard Time.
+    # Runs 30 min after GitHub Actions scrape so the CSV is already in Drive.
+    schedule: "30 1 * * *"
     buildCommand: pip install -r requirements-render.txt
     startCommand: python scripts/run_kpi4.py
     envVars:
