@@ -168,6 +168,22 @@ def read_cancellations(combined_xlsx_path, excluded_plans=None):
     return out
 
 
+RUN_HISTORY_HEADER = ["Pull Date", "New Count", "Cancelled Count",
+                      "New Members", "Cancelled Members"]
+
+
+def append_run_history(wb, pull_date, cancelled_this_run, new_this_run):
+    """Append a summary row to the Run History tab (creates it on first run)."""
+    if "Run History" not in wb.sheetnames:
+        ws = wb.create_sheet(title="Run History", index=0)
+        ws.append(RUN_HISTORY_HEADER)
+    else:
+        ws = wb["Run History"]
+    new_names = "; ".join("%s (%s)" % (r["display_name"], r["plan"]) for r in new_this_run)
+    cx_names = "; ".join("%s (%s)" % (r["display_name"], r["plan"]) for r in cancelled_this_run)
+    ws.append([pull_date, len(new_this_run), len(cancelled_this_run), new_names, cx_names])
+
+
 def append_snapshot_tab(wb, pull_date, csv_rows):
     """Create a new tab named pull_date (with " (N)" suffix on collision) and fill it."""
     base = pull_date
@@ -247,6 +263,9 @@ def update_combined_file(combined_xlsx_path, csv_rows, pull_date, output_xlsx_pa
 
     # --- Append the new snapshot tab ---
     tab_name = append_snapshot_tab(wb, pull_date, csv_rows)
+
+    # --- Log this run to the Run History tab ---
+    append_run_history(wb, pull_date, cancelled_this_run, new_this_run)
 
     wb.save(output_xlsx_path)
 
