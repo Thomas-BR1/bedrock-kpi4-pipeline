@@ -92,39 +92,61 @@ def login(page, email: str, password: str) -> None:
     except Exception:
         pass
 
-    # Try multiple ways to find the email input
-    email_field = _first_visible(page, [
-        'input[type="email"]',
-        'input[name="email"]',
-        'input[name="user[email]"]',
-        'input[id*="email" i]',
-        'input[placeholder*="email" i]',
-        page.get_by_label(re.compile(r"email", re.I)),
-        page.get_by_placeholder(re.compile(r"email", re.I)),
-        page.get_by_role("textbox", name=re.compile(r"email", re.I)),
-    ])
-    email_field.fill(email)
+    # HCP uses Material-style floating labels without proper <label for> hookups.
+    # The most reliable approach: grab the two visible inputs on the page — the
+    # first is email, the second is password. Confirmed by the login page screenshot.
+    inputs = page.locator("input:visible")
+    inputs.first.wait_for(state="visible", timeout=15_000)
+    n_inputs = inputs.count()
+    print("Visible inputs on login page: %d" % n_inputs)
 
-    password_field = _first_visible(page, [
-        'input[type="password"]',
-        'input[name="password"]',
-        'input[name="user[password]"]',
-        'input[id*="password" i]',
-        page.get_by_label(re.compile(r"password", re.I)),
-        page.get_by_placeholder(re.compile(r"password", re.I)),
-    ])
+    # Dump some diagnostic HTML about the inputs so future breakage is debuggable
+    for i in range(min(n_inputs, 4)):
+        try:
+            attrs = inputs.nth(i).evaluate(
+                "el => ({type: el.type, name: el.name, id: el.id, placeholder: el.placeholder})"
+            )
+            print("  input[%d]: %s" % (i, attrs))
+        except Exception:
+            pass
+
+    if n_inputs < 2:
+        raise SystemExit("Expected at least 2 input fields on the login page.")
+
+    # Prefer typed inputs when available; otherwise fall back to positional.
+    email_field = None
+    password_field = None
+    typed_email = page.locator('input[type="email"]:visible')
+    typed_pwd = page.locator('input[type="password"]:visible')
+    if typed_email.count() > 0:
+        email_field = typed_email.first
+    if typed_pwd.count() > 0:
+        password_field = typed_pwd.first
+    if email_field is None:
+        email_field = inputs.nth(0)
+    if password_field is None:
+        password_field = inputs.nth(1)
+
+    email_field.fill(email)
     password_field.fill(password)
 
+    # Click Sign in — try button text first, then any submit-type control.
     submit = _first_visible(page, [
-        page.get_by_role("button", name=re.compile(r"^(log in|sign in|continue)", re.I)),
+        page.get_by_role("button", name=re.compile(r"^\s*(sign in|log in|continue)\s*$", re.I)),
+        page.locator('button:has-text("Sign in")'),
+        page.locator('button:has-text("Log in")'),
         'button[type="submit"]',
         'input[type="submit"]',
     ], timeout=5_000)
     submit.click()
 
-    # Wait for a signed-in signal — anything indicating we made it past the login
-    page.wait_for_url(re.compile(r"pro\.housecallpro\.com/app|dashboard|home"), timeout=45_000)
-    print("Logged in.")
+    # Wait for URL change — HCP redirects to /app/... after login
+    try:
+        page.wait_for_url(re.compile(r"pro\.housecallpro\.com/app"), timeout=45_000)
+    except Exception:
+        print("URL after submit: %s" % page.url)
+        raise
+    print("Logged in. Now at: %s" % page.url)
 
 
 def open_service_agreements(page) -> None:
@@ -268,7 +290,6 @@ def main() -> int:
                 raise SystemExit("No rows scraped. See failed_scrape.png artifact.")
             write_csv(rows, csv_path)
         except Exception as e:
-            # Always leave a screenshot behind for debugging in the Actions artifact
             try:
                 page.screenshot(path="failure.png", full_page=True)
                 print("Saved failure.png for debugging")
@@ -286,4 +307,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-        sys.exit(main())
+    sys.exit(main())
