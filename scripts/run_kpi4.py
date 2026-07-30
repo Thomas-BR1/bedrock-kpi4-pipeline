@@ -134,7 +134,7 @@ def main() -> int:
             "--csv", csv_local,
             "--combined-xlsx", updated_combined,
             "--output", daily_html_local,
-            "--template", str(REPO_ROOT / "kpi4" / "assets" / "report_template.html"),
+            "--template", str(REPO_ROOT / "kpi4" / "assets" / "daily_report_template.html"),
         ])
         with open(daily_html_local, "r", encoding="utf-8") as f:
             daily_html = f.read()
