@@ -199,6 +199,25 @@ def append_snapshot_tab(wb, pull_date, csv_rows):
     return name
 
 
+def prune_old_snapshot_tabs(wb, keep_last=7):
+    """
+    Delete dated snapshot tabs older than the most recent `keep_last`.
+    Preserves Run History, Name Tracking, Sheet1, and any non-date-named tab.
+    Snapshot tabs match YYYY-MM-DD (with optional " (N)" suffix).
+    Keeps memory down and the file small — Run History captures the audit trail
+    for older days, so old snapshots are safe to drop.
+    """
+    import re as _re
+    date_pat = _re.compile(r"^\d{4}-\d{2}-\d{2}( \(\d+\))?$")
+    snapshot_tabs = [name for name in wb.sheetnames if date_pat.match(name)]
+    # Sort by the date prefix ascending; keep the newest `keep_last`
+    snapshot_tabs.sort(key=lambda s: s[:10])
+    to_delete = snapshot_tabs[:-keep_last] if len(snapshot_tabs) > keep_last else []
+    for name in to_delete:
+        del wb[name]
+    return to_delete
+
+
 def update_combined_file(combined_xlsx_path, csv_rows, pull_date, output_xlsx_path, excluded_plans=None):
     """
     Main entry. Loads the .xlsx, computes the diff, updates Name Tracking in place,
@@ -266,6 +285,11 @@ def update_combined_file(combined_xlsx_path, csv_rows, pull_date, output_xlsx_pa
 
     # --- Log this run to the Run History tab ---
     append_run_history(wb, pull_date, cancelled_this_run, new_this_run)
+
+    # --- Prune old snapshot tabs so the file stays small (daily cadence) ---
+    pruned = prune_old_snapshot_tabs(wb, keep_last=7)
+    if pruned:
+        print("Pruned %d old snapshot tabs: %s" % (len(pruned), ", ".join(pruned)))
 
     wb.save(output_xlsx_path)
 
