@@ -112,18 +112,76 @@ def main() -> int:
 
     # Uploading the HTML report as a NEW Drive file requires storage quota, which
     # service accounts don't have unless the target folder lives on a Shared Drive.
-    # Try it, but don't fail the whole run if it errors — the sheet update above is
-    # the important side effect.
     try:
         print("Uploading HTML report to Drive folder...")
         upload_file(service, report_local, csv_folder_id, mime_type="text/html")
     except Exception as e:
-        print("Report upload skipped (service account lacks storage quota): %s" % e)
-        print("The Combined File in Drive is still updated. Generate the HTML report")
-        print("on demand via the Cowork skill, or move the folder to a Shared Drive.")
+        print("Report upload skipped: %s" % e)
+
+    # 5. Build the daily KPI 4 report and email it.
+    try:
+        print("Building daily KPI 4 report...")
+        import build_kpi4_daily as bkd  # noqa: E402
+        daily_html_local = "/tmp/kpi4_daily_%s.html" % pull_date
+        # build_kpi4_daily writes directly to --output; call it as a subprocess-style function.
+        import subprocess
+        subprocess.check_call([
+            sys.executable, str(REPO_ROOT / "kpi4" / "build_kpi4_daily.py"),
+            "--csv", csv_local,
+            "--combined-xlsx", updated_combined,
+            "--output", daily_html_local,
+        ])
+        with open(daily_html_local, "r", encoding="utf-8") as f:
+            daily_html = f.read()
+        print("Daily report ready: %d bytes" % len(daily_html))
+
+        # Email it if SMTP env vars are present.
+        smtp_user = os.environ.get("SMTP_USER")
+        smtp_pass = os.environ.get("SMTP_PASSWORD")
+        email_from = os.environ.get("EMAIL_FROM") or smtp_user
+        email_to = os.environ.get("EMAIL_TO")
+        if smtp_user and smtp_pass and email_to:
+            send_daily_email(daily_html, pull_date, email_from, email_to,
+                             smtp_user, smtp_pass)
+        else:
+            print("SMTP not configured — skipping daily email "
+                  "(set SMTP_USER, SMTP_PASSWORD, EMAIL_TO to enable).")
+    except Exception as e:
+        print("Daily email step failed (main run still succeeded): %s" % e)
 
     print("Done. Total active: %d" % agg["summary"]["total_active"])
     return 0
+
+
+def send_daily_email(html_body: str, pull_date: str, email_from: str, email_to: str,
+                     smtp_user: str, smtp_pass: str) -> None:
+    """Send the daily KPI 4 report via Gmail SMTP."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "KPI 4 Daily — %s" % pull_date
+    msg["From"] = email_from
+    msg["To"] = email_to
+    plain = ("KPI 4 daily membership snapshot for %s.\n"
+             "This is an HTML email; view in a modern client to see the charts and cards.\n"
+             % pull_date)
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    print("Sending daily email via %s:%d to %s..." % (smtp_host, smtp_port, email_to))
+    with smtplib.SMTP(smtp_host, smtp_port) as s:
+        s.ehlo()
+        s.starttls()
+        s.ehlo()
+        s.login(smtp_user, smtp_pass)
+        for recipient in [r.strip() for r in email_to.split(",") if r.strip()]:
+            s.sendmail(email_from, recipient, msg.as_string())
+    print("Email sent.")
 
 
 if __name__ == "__main__":
