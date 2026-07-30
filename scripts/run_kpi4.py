@@ -121,12 +121,16 @@ def main() -> int:
     # 5. Build the daily KPI 4 report and email it.
     try:
         print("Building daily KPI 4 report...")
-        import build_kpi4_daily as bkd  # noqa: E402
         daily_html_local = "/tmp/kpi4_daily_%s.html" % pull_date
-        # build_kpi4_daily writes directly to --output; call it as a subprocess-style function.
+        daily_script = REPO_ROOT / "kpi4" / "build_kpi4_daily.py"
+        if not daily_script.is_file():
+            raise SystemExit(
+                "Daily build script not found at %s. "
+                "Make sure kpi4/build_kpi4_daily.py is in the repo." % daily_script
+            )
         import subprocess
         subprocess.check_call([
-            sys.executable, str(REPO_ROOT / "kpi4" / "build_kpi4_daily.py"),
+            sys.executable, str(daily_script),
             "--csv", csv_local,
             "--combined-xlsx", updated_combined,
             "--output", daily_html_local,
