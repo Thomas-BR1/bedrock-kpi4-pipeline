@@ -334,7 +334,10 @@ def scrape_all_rows(page):
         # dedupe defensively — some UIs re-render current page after page-size change
         new_this_page = 0
         for r in page_rows:
-            key = (r["Display Name"], r["Plan"], r["Start Date"])
+            # Include Status in dedup so an Active + Draft pair with the same
+            # (name, plan, start) both survive — otherwise the Draft can shadow
+            # the Active one and cause a false cancellation.
+            key = (r["Display Name"], r["Plan"], r["Start Date"], r["Status"])
             if key in seen_keys:
                 continue
             seen_keys.add(key)
