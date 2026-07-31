@@ -237,16 +237,36 @@ def update_combined_file(combined_xlsx_path, csv_rows, pull_date, output_xlsx_pa
     _, col_index, nt_rows = read_name_tracking(nt)
 
     current_active = build_current_active(csv_rows, excluded_plans=excluded_plans)
+    # "Present in CSV in any non-terminal status" — Active / Draft / Sent / etc.
+    # A member showing up here still exists in HCP; we should NOT mark them
+    # Cancelled just because their status flipped from Active to Draft. The
+    # active-count metric still only counts Active, but Name Tracking treats
+    # them as still-alive.
+    terminal_statuses = {"Cancelled", "Expired"}
+    csv_present = set()
+    for r in csv_rows:
+        plan = _norm(r.get("Plan"))
+        if plan in excluded_plans:
+            continue
+        status = _norm(r.get("Status"))
+        if status in terminal_statuses:
+            continue  # counts as a cancellation, not "still present"
+        name = _norm(r.get("Display Name"))
+        if name and plan:
+            csv_present.add((name, plan))
+
     nt_all_keys = {(r["Display Name"], r["Plan"]) for r in nt_rows}
     # Skip Name Tracking rows whose plan is excluded — don't cancel them.
     nt_active_rows = [r for r in nt_rows
                       if r["Status"] == "Active" and r["Plan"] not in excluded_plans]
 
-    # --- Cancellations: prior-active keys not present in current active set ---
+    # --- Cancellations: prior-Active NT keys that are truly gone from CSV
+    #     (absent entirely, or present with terminal status). Drafts/Sents
+    #     are protective — they leave NT Active. ---
     cancelled_this_run = []
     for r in nt_active_rows:
         key = (r["Display Name"], r["Plan"])
-        if key not in current_active:
+        if key not in csv_present:
             # Update in place
             nt.cell(row=r["_row"], column=col_index["Status"]).value = "Cancelled"
             nt.cell(row=r["_row"], column=col_index["End Date"]).value = pull_date
