@@ -129,12 +129,18 @@ def main() -> int:
                 "Make sure kpi4/build_kpi4_daily.py is in the repo." % daily_script
             )
         import subprocess
+        # Anchor the daily report on YESTERDAY, not today. Data collection runs
+        # at midnight so "today" (the run day) has near-zero activity by design.
+        # Shifting the anchor back one day means the report's "Today" is the
+        # most recent full business day, and "Yesterday" is the one before that.
+        anchor_date = (today - datetime.timedelta(days=1)).isoformat()
         subprocess.check_call([
             sys.executable, str(daily_script),
             "--csv", csv_local,
             "--combined-xlsx", updated_combined,
             "--output", daily_html_local,
             "--template", str(REPO_ROOT / "kpi4" / "assets" / "daily_report_template.html"),
+            "--date", anchor_date,
         ])
         with open(daily_html_local, "r", encoding="utf-8") as f:
             daily_html = f.read()
